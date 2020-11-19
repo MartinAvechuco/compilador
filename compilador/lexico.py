@@ -1,469 +1,629 @@
+from compilador.lexico import Lexico, TOKENS, TOKENS_INV, Zonas
 from compilador.errores import Error, ColeccionError
 
-CONSTANTES = ('BOOL', 'CALL','CHAR', 'CONST_CHAR', 'CONST_STRING', 'DIF', 'DO',
-    'ELSE', 'FLOAT', 'FOR', 'FUNCTION', 'ID', 'IF', 'IGU', 'INT', 'MAI', 'MAIN',
-    'MAY', 'MEI', 'MEN', 'NUM', 'NUMF', 'READ', 'RETURN', 'STRING', 'THEN', 'TO',
-    'VOID', 'WHILE', 'WRITE', 'FALSE', 'TRUE',)
-
-PALABRAS_RESERVADAS = ('bool', 'call', 'char', 'do', 'else', 'float', 'for',
-    'function', 'if', 'int', 'main', 'read', 'return', 'string', 'then', 'to',
-    'void', 'while', 'write', 'false', 'true',)
-
-TOKENS = {constante: token for (token, constante) in enumerate(CONSTANTES, 256)}
-TOKENS_INV = {token: constante for (constante, token) in TOKENS.items()}
-
-SIMBOLOS_PERMITIDOS = r"(){}[],;+-*/\%&|!"
-
-class Simbolo(object):
-    def __init__(self, token=None, lexema=None):
-        self.token = token
-        self.lexema = lexema
-
-    def __repr__(self):
-        return f"{self.lexema} ({self.token})"
-
-    @property
-    def codigo(self):
-        return TOKENS_INV.get(self.token, 'ERROR!') if self.token > 255 else chr(self.token)
-
-
-class Lexico(object):
-    def __init__(self, codigo="", errores=ColeccionError()):
-        self.codigo = codigo + " "
-        self.tabla_de_simbolos = []
-        self.indice = -1
-        self.inicio_lexema = 0
-        self.numero_de_linea = 1
-        self.inicio = 0
-        self.estado = 0
-        self.caracter = self.codigo[0]
-        self.lexema = ""
-        self.token = None
-        self.__errores = errores
-        self.errores = self.__errores.coleccion
-        self.__cargar_palabras_reservadas()
-
-    def inserta_simbolo(self, simbolo=None, token=None, lexema=None):
-        """
-        Inserta un simbolo en la tabla de simbolos. Puede aceptar un simbolo,
-        o bien, un token y lexema.
-        """
-        if simbolo:
-            self.tabla_de_simbolos.append(simbolo)
-
-        elif token and lexema:
-            self.tabla_de_simbolos.append(Simbolo(token=token, lexema=lexema))
-
-        else:
-            raise Exception("Debe proveer un Simbolo, o bien token y lexema!")
-
-    def __buscar_simbolo(self, lexema=''):
-        """
-        Recibe un lexema y busca un simbolo que coincida con el lexema en la
-        tabla de simbolos.
-        """
-        return next((s for s in self.tabla_de_simbolos if s.lexema == lexema), None)
-
-    def __siguiente_caracter(self):
-        """
-        Regresa el siguiente caracter en el codigo fuente.
-        """
-        try:
-            self.indice += 1
-            return self.codigo[self.indice]
-
-        except IndexError:
-            return None
-
-    def __avanza_inicio_lexema(self):
-        """
-        Mueve el inicio del lexema una posicion hacia adelante.
-        """
-        self.inicio_lexema = self.indice + 1
-
-    def __cargar_palabras_reservadas(self):
-        """
-        Carga las palabras reservadas en la tabla de simbolos antes de iniciar
-        el proceso de compilacion.
-        """
-        self.tabla_de_simbolos = list(map(lambda palabra:
-                Simbolo(
-                    token=TOKENS.get(palabra.upper()),
-                    lexema=palabra
-                ),
-            PALABRAS_RESERVADAS)
-        )
+class Sintactico(object):
+    def __init__(self, codigo=''):
+        self.errores = ColeccionError()
+        self.lexico = Lexico(codigo=codigo, errores=self.errores)
+        self.complex = self.siguiente_componente_lexico()
 
     def siguiente_componente_lexico(self):
-        """
-        Regresa el siguiente componente lexico (Simbolo) encontrado en el codigo
-        fuente.
-        """
-        caracter = None
-        while True:
-            if self.estado == 0:
-                caracter = self.__siguiente_caracter()
-                if caracter in (' ', '\t', '\n'):
-                    self.__avanza_inicio_lexema()
-                    if caracter == '\n':
-                        self.numero_de_linea += 1
+        self.complex = self.lexico.siguiente_componente_lexico()
+        return self.complex
 
-                elif caracter is None:
-                    return None
+    @property
+    def numero_de_linea(self):
+        return self.lexico.numero_de_linea
 
-                elif caracter == '<':
-                    self.estado = 1
+    def __verifica(self, token):
+        if isinstance(token, str) and len(token) == 1:
+            token = ord(token)
 
-                elif caracter == '=':
-                    self.estado = 5
+        elif not isinstance(token, int):
+            raise ValueError()
 
-                elif caracter == '>':
-                    self.estado = 6
+        # print(f'{self.complex.token} == {token}? {self.complex.token == token}')
+        if self.complex is not None:
+            return self.complex.token == token
 
-                else:
-                    self.estado = self.__fallo()
+        return False
 
-            elif self.estado == 1:
-                caracter = self.__siguiente_caracter()
-                if caracter == '=':
-                    self.estado = 2
+    def __compara(self, token):
+        if isinstance(token, str) and len(token) == 1:
+            token = ord(token)
 
-                elif caracter == '>':
-                    self.estado = 3
+        elif not isinstance(token, int):
+            raise ValueError()
 
-                else:
-                    self.estado = 4
+        if self.complex is not None and self.complex.token == token:
+            self.siguiente_componente_lexico()
 
-            elif self.estado == 2:
-                return Simbolo(token=TOKENS['MEI'], lexema=self.__leer_lexema())
+        else:
+            self.__agregar_error(tipo='SINTACTICO', mensaje=f"Se esperaba: '{chr(token) if token < 256 else TOKENS_INV[token]}'")
 
-            elif self.estado == 3:
-                return Simbolo(token=TOKENS['DIF'], lexema=self.__leer_lexema())
+    def __agregar_error(self, tipo='SINTACTICO', mensaje=None):
+        self.errores.agregar(Error(tipo=tipo, num_linea=self.numero_de_linea, mensaje=mensaje))
 
-            elif self.estado == 4:
-                self.__retrocede_indice()
-                return Simbolo(token=TOKENS['MEN'], lexema=self.__leer_lexema())
-
-            elif self.estado == 5:
-                return Simbolo(token=TOKENS['IGU'], lexema=self.__leer_lexema())
-
-            elif self.estado == 6:
-                caracter = self.__siguiente_caracter()
-                if caracter == '=':
-                    self.estado = 7
+    def PROGRAMA(self):
+        if self.DEFINIR_VARIABLES():
+            if self.DEFINIR_FUNCIONES():
+                if self.PRINCIPAL():
+                    return True
 
                 else:
-                    self.estado = 8
+                    self.__agregar_error(tipo='SINTACTICO', mensaje='Se requiere cuerpo principal del programa')
 
-            elif self.estado == 7:
-                return Simbolo(token=TOKENS['MAI'], lexema=self.__leer_lexema())
+        return False
 
-            elif self.estado == 8:
-                self.__retrocede_indice()
-                return Simbolo(token=TOKENS['MAY'], lexema=self.__leer_lexema())
+    def DEFINIR_VARIABLES(self):
+        self.VARIABLES()
+        return True
 
-            elif self.estado == 9:
-                if caracter.isalpha():
-                    self.estado = 10
+    # VARIABLES -> VARIABLES VARIABLE | VARIABLE
+    # VARIABLES -> VARIABLE VARIABLES_PRIMA
+    # VARIABLES_PRIMA -> VARIABLE VARIABLES_PRIMA | ϵ
+
+    def VARIABLES(self):
+        if self.VARIABLE():
+            if self.VARIABLES_PRIMA():
+                return True
+
+        return False
+
+    def VARIABLES_PRIMA(self):
+        if self.VARIABLE():
+            if self.VARIABLES_PRIMA():
+                return True
+
+            return False
+
+        return True
+
+    def VARIABLE(self):
+        if self.TIPO():
+            if self.IDENTIFICADORES():
+                self.__compara(';')
+                return True
+
+        return False
+
+    def TIPO(self):
+        if next((True for x in ('INT', 'BOOL', 'FLOAT', 'CHAR', 'STRING', 'VOID') if self.__verifica(TOKENS[x])), False):
+            self.__compara(self.complex.token)
+            return True
+
+        return False
+
+    # IDENTIFICADORES -> IDENTIFICADORES , IDENTIFICADOR | IDENTIFICADOR
+    # IDENTIFICADORES -> IDENTIFICADOR IDENTIFICADORES_PRIMA
+    # IDENTIFICADORES_PRIMA -> , IDENTIFICADOR IDENTIFICADORES_PRIMA | ϵ
+
+    def IDENTIFICADORES(self):
+        if self.IDENTIFICADOR():
+            if self.IDENTIFICADORES_PRIMA():
+                return True
+
+        return False
+
+    def IDENTIFICADORES_PRIMA(self):
+        if self.__verifica(','):
+            self.__compara(',')
+            if self.IDENTIFICADOR():
+                if self.IDENTIFICADORES_PRIMA():
+                    return True
+
+            return False
+
+        return True
+
+    def IDENTIFICADOR(self):
+        if self.__verifica(TOKENS['ID']):
+            self.__compara(self.complex.token)
+            if self.ES_ARREGLO():
+                return True
+
+        return False
+
+    def ES_ARREGLO(self):
+        if self.__verifica('['):
+            self.__compara(self.complex.token)
+            self.__compara(TOKENS['NUM'])
+            self.__compara(']')
+            return True
+
+        return True
+
+    def DEFINIR_FUNCIONES(self):
+        self.FUNCIONES()
+        return True
+
+    # FUNCIONES -> FUNCIONES FUNCION | FUNCION
+    # FUNCIONES -> FUNCION FUNCIONES_PRIMA
+    # FUNCIONES_PRIMA -> FUNCION FUNCIONES_PRIMA | ϵ
+
+    def FUNCIONES(self):
+        if self.FUNCION():
+            if self.FUNCIONES_PRIMA():
+                return True
+
+        return False
+
+    def FUNCIONES_PRIMA(self):
+        if self.FUNCION():
+            if self.FUNCIONES_PRIMA():
+                return True
+
+            return False
+
+        return True
+
+    def FUNCION(self):
+        if self.__verifica(TOKENS['FUNCTION']):
+            self.__compara(self.complex.token)
+            if self.lexico.fin_definicion_variables_globales is None:
+                self.lexico.marcar_posicion(posicion='fin_definicion_variables_globales')
+            self.lexico.zona_de_codigo = Zonas.DEF_VARIABLES_LOCALES
+            self.lexico.marcar_posicion(posicion = 'inicio_definicion_variables_locales')
+            if self.TIPO():
+                self.__compara(TOKENS['ID'])
+                self.__compara('(')
+                if self.PARAMETROS_FORMALES():
+                    self.__compara(')')
+                    if self.DEFINIR_VARIABLES():
+                        self.lexico.marcar_posicion(posicion='fin_definicion_variables_locales')
+                        self.lexico.zona_de_codigo = Zonas.CUERPO_FUNCION_LOCAL
+                        if self.CUERPO_FUNCION():
+                            self.lexico.zona_de_codigo = Zonas.DEF_VARIABLES_GLOBALES
+                            return True
+
+        self.lexico.zona_de_codigo = Zonas.DEF_VARIABLES_GLOBALES
+        return False
+
+    def PARAMETROS_FORMALES(self):
+        self.PARAMETROS()
+        return True
+
+    def PARAMETROS(self):
+        if self.PARAMETRO():
+            if self.PARAMETROS_PRIMA():
+                return True
+
+        return False
+
+    def PARAMETROS_PRIMA(self):
+        if self.__verifica(','):
+            self.__compara(',')
+            if self.PARAMETRO():
+                if self.PARAMETROS_PRIMA():
+                    return True
+
+            return False
+
+        return True
+
+    def PARAMETRO(self):
+        if self.TIPO():
+            self.__compara(TOKENS['ID'])
+            return True
+
+        return False
+
+    def CUERPO_FUNCION(self):
+        if self.BLOQUE():
+            return True
+
+        return False
+
+    def BLOQUE(self):
+        if self.__verifica('{'):
+            self.__compara(self.complex.token)
+            if self.ORDENES():
+                self.__compara('}')
+                return True
+
+        return False
+
+    # ORDENES -> ORDENES ORDEN | ORDEN
+    # ORDENES -> ORDEN ORDENES_PRIMA
+    # ORDENES_PRIMA -> ORDEN ORDENES_PRIMA | ϵ
+
+    def ORDENES(self):
+        if self.ORDEN():
+            if self.ORDENES_PRIMA():
+                return True
+
+        return False
+
+    def ORDENES_PRIMA(self):
+        if self.ORDEN():
+            if self.ORDENES_PRIMA():
+                return True
+
+            return False
+
+        return True
+
+    def ORDEN(self):
+        if any((self.ASIGNACION(), self.DECISION(), self.ITERACION(), self.ENTRADA_SALIDA(), self.BLOQUE(), self.RETORNO())):
+            return True
+
+        return False
+
+    def ASIGNACION(self):
+        if self.DESTINO():
+            self.__compara(TOKENS['IGU'])
+            if self.FUENTE():
+                self.__compara(';')
+                return True
+
+        return False
+
+    def DESTINO(self):
+        if self.__verifica(TOKENS['ID']):
+            self.__compara(self.complex.token)
+            if self.ELEMENTO_ARREGLO():
+                return True
+
+        return False
+
+    def ELEMENTO_ARREGLO(self):
+        if self.__verifica('['):
+            self.__compara(self.complex.token)
+            if self.EXPRESION():
+                self.__compara(']')
+                return True
+
+            self.__agregar_error(mensaje='Se esperaba una Expresion')
+            return False
+
+        return True
+
+    def FUENTE(self):
+        if self.EXPRESION():
+            return True
+
+        self.__agregar_error(tipo='SINTACTICO', mensaje='Se esperaba una expresion')
+        return False
+
+    def DECISION(self):
+        if self.__verifica(TOKENS['IF']):
+            self.__compara(self.complex.token)
+            self.__compara('(')
+            if self.EXPRESION():
+                self.__compara(')')
+                self.__compara(TOKENS['THEN'])
+                if self.ORDEN():
+                    if self.TIENE_ELSE():
+                        return True
 
                 else:
-                    self.estado = self.__fallo()
-
-            elif self.estado == 10:
-                caracter = self.__siguiente_caracter()
-                if not caracter.isalnum():
-                    self.estado = 11
-
-            elif self.estado == 11:
-                self.__retrocede_indice()
-                lexema = self.__leer_lexema()
-                simbolo = self.__buscar_simbolo(lexema=lexema)
-                if simbolo is None:
-                    simbolo = Simbolo(token=TOKENS['ID'], lexema=lexema)
-                    self.inserta_simbolo(simbolo=simbolo)
-
-                return simbolo
-
-            elif self.estado == 12:
-                if caracter.isdigit():
-                    self.estado = 13
-
-                else:
-                    self.estado = self.__fallo()
-
-            elif self.estado == 13:
-                caracter = self.__siguiente_caracter()
-                if caracter == '.':
-                    self.estado = 14
-
-                elif caracter in 'Ee':
-                    self.estado = 16
-
-                elif caracter.isdigit():
-                    pass
-
-                else:
-                    self.estado = 20
-
-            elif self.estado == 14:
-                caracter = self.__siguiente_caracter()
-                if caracter.isdigit():
-                    self.estado = 15
-
-                else:
-                    self.estado = self.__fallo()
-
-            elif self.estado == 15:
-                caracter = self.__siguiente_caracter()
-                if caracter in 'Ee':
-                    self.estado = 16
-
-                elif caracter.isdigit():
-                    pass
-
-                else:
-                    self.estado = 21
-
-            elif self.estado == 16:
-                caracter = self.__siguiente_caracter()
-                if caracter in '+-':
-                    self.estado = 17
-
-                elif caracter.isdigit():
-                    self.estado = 18
-
-                else:
-                    self.estado = self.__fallo()
-
-            elif self.estado == 17:
-                caracter = self.__siguiente_caracter()
-                if caracter.isdigit():
-                    self.estado = 18
-
-                else:
-                    self.estado = self.__fallo()
-
-            elif self.estado == 18:
-                caracter = self.__siguiente_caracter()
-                if caracter.isdigit():
-                    pass
-
-                else:
-                    self.estado = 19
-
-            elif self.estado == 19 or self.estado == 21:
-                self.__retrocede_indice()
-                return Simbolo(token=TOKENS['NUMF'], lexema=self.__leer_lexema())
-
-            elif self.estado == 20:
-                self.__retrocede_indice()
-                return Simbolo(token=TOKENS['NUM'], lexema=self.__leer_lexema())
-
-            elif self.estado == 22:
-                caracter = self.__sync_caracter()
-                if caracter == '"':
-                    self.estado = 23
-
-                else:
-                    self.estado = self.__fallo()
-
-            elif self.estado == 23:
-                caracter = self.__siguiente_caracter()
-                if caracter == '\\':
-                    self.estado = 24
-
-                elif  caracter == '"':
-                    self.estado = 25
-
-                elif caracter is not None:
-                    pass
-
-                else:
-                    self.estado = self.__fallo()
-
-            elif self.estado == 24:
-                caracter = self.__siguiente_caracter()
-                if caracter in r'atrn\"':
-                    self.estado = 23
-
-                else:
-                    self.estado = self.__fallo()
-
-            elif self.estado == 25:
-                return Simbolo(token=TOKENS['CONST_STRING'], lexema=self.__leer_lexema())
-
-            elif self.estado == 26:
-                caracter = self.__sync_caracter()
-                if caracter == "'":
-                    self.estado = 27
-
-                else:
-                    self.estado = self.__fallo()
-
-            elif self.estado == 27:
-                caracter = self.__siguiente_caracter()
-                if caracter == "\\":
-                    self.estado = 28
-
-                elif caracter is not None:
-                    self.estado = 29
-
-                else:
-                    self.estado = self.__fallo()
-
-            elif self.estado == 28:
-                caracter = self.__siguiente_caracter()
-                if caracter in r"atrn\'":
-                    self.estado = 29
-
-                else:
-                    self.estado = self.__fallo()
-
-            elif self.estado == 29:
-                caracter = self.__siguiente_caracter()
-                if caracter == "'":
-                    self.estado = 30
-
-                else:
-                    self.estado = self.__fallo()
-
-            elif self.estado == 30:
-                return Simbolo(token=TOKENS['CONST_CHAR'], lexema=self.__leer_lexema())
-
-            elif self.estado == 31:
-                caracter = self.__sync_caracter()
-                if caracter == '/':
-                    self.estado = 32
-
-                else:
-                    self.estado = self.__fallo()
-
-            elif self.estado == 32:
-                caracter = self.__siguiente_caracter()
-                if caracter == '/':
-                    self.estado = 33
-
-                else:
-                    self.estado = self.__fallo()
-
-            elif self.estado == 33:
-                caracter = self.__siguiente_caracter()
-                if caracter == '\n' or caracter is None:
-                    if caracter == '\n':
-                        self.numero_de_linea += 1
-
-                    self.estado = 34
-
-                else:
-                    pass
-
-            elif self.estado == 34:
-                self.__retrocede_indice()
-                self.__leer_lexema()
-
-            elif self.estado == 35:
-                caracter = self.__sync_caracter()
-                if caracter == '/':
-                    self.estado = 36
-
-                else:
-                    self.estado = self.__fallo()
-
-            elif self.estado == 36:
-                caracter = self.__siguiente_caracter()
-                if caracter == '*':
-                    self.estado = 37
-
-                else:
-                    self.estado = self.__fallo()
-
-            elif self.estado == 37:
-                caracter = self.__siguiente_caracter()
-                if caracter == '*':
-                    self.estado = 38
-
-                elif caracter == '\n':
-                    self.numero_de_linea += 1
-
-                else:
-                    pass
-
-            elif self.estado == 38:
-                caracter = self.__siguiente_caracter()
-                if caracter == '/':
-                    self.estado = 39
-
-                else:
-                    self.estado = 37
-
-            elif self.estado == 39:
-                self.__leer_lexema()
+                    self.__agregar_error(tipo='SINTACTICO', mensaje='Se esperaba una orden')
 
             else:
-                caracter = self.__sync_caracter()
-                if caracter in SIMBOLOS_PERMITIDOS:
-                    return Simbolo(token=ord(caracter), lexema=self.__leer_lexema())
+                self.__agregar_error(tipo='SINTACTICO', mensaje='Se esperaba una expresion')
+
+        return False
+
+    def TIENE_ELSE(self):
+        if self.__verifica(TOKENS['ELSE']):
+            self.__compara(self.complex.token)
+            if self.ORDEN():
+                return True
+
+            self.__agregar_error(tipo='SINTACTICO', mensaje='Se esperaba una orden')
+            return False
+        
+        return True
+
+    def ITERACION(self):
+        if self.__verifica(TOKENS['FOR']):
+            self.__compara(self.complex.token)
+            self.__compara(TOKENS['ID'])
+            self.__compara(TOKENS['IGU'])
+            if self.EXPRESION():
+                self.__compara(TOKENS['TO'])
+                if self.EXPRESION():
+                    if self.ORDEN():
+                        return True
+
+                    else:
+                        self.__agregar_error(tipo='SINTACTICO', mensaje='Se esperaba una orden')
 
                 else:
-                    self.estado = 0
-                    self.__errores.agregar(
-                        Error(
-                            tipo='LEXICO',
-                            num_linea=self.numero_de_linea,
-                            mensaje=f"Simbolo no permitido: '{self.__leer_lexema()}'"
-                        )
-                    )
+                    self.__agregar_error(tipo='SINTACTICO', mensaje='Se esperaba una expresion')
 
-    def __leer_lexema(self):
-        """
-        Regresa la secuencia de caracteres entre el inicio_lexema y el indice,
-        despues mueve el inicio_lexema a la siguiente posicion.
-        """
-        self.lexema = self.codigo[self.inicio_lexema: self.indice + 1]
-        self.__avanza_inicio_lexema()
-        self.inicio = 0
-        self.estado = 0
-        return self.lexema
+            else:
+                self.__agregar_error(tipo='SINTACTICO', mensaje='Se esperaba una expresion')
 
-    def __retrocede_indice(self):
-        """
-        Retrocede el indice una posicion hacia atras. Equivale al asterisco en
-        los estados de aceptacion.
-        """
-        self.indice -= 1
+        elif self.__verifica(TOKENS['WHILE']):
+            self.__compara(self.complex.token)
+            self.__compara('(')
+            if self.EXPRESION_LOGICA():
+                self.__compara(')')
+                self.__compara(TOKENS['DO'])
+                if self.ORDEN():
+                    return True
 
-    def __sync_caracter(self):
-        """
-        Si un automata falla en un estado intermedio, establece el indice en la
-        posicion de inicio_lexema y regresa el caracter en esa posicion.
-        """
-        self.indice = self.inicio_lexema
-        return self.codigo[self.indice]
+                else:
+                    self.__agregar_error(tipo='SINTACTICO', mensaje='Se esperaba una orden')
 
-    def __fallo(self):
-        """
-        Regresa el valor del estado inicial del siguiente automata a probar
-        cuando el automata anterior fallo.
-        """
-        if self.inicio == 0:
-            self.inicio = 9
+            else:
+                self.__agregar_error(tipo='SINTACTICO', mensaje='Se esperaba una expresion')
 
-        elif self.inicio == 9:
-            self.inicio = 12
+        elif self.__verifica(TOKENS['DO']):
+            if self.ORDEN():
+                self.__compara(TOKENS['WHILE'])
+                self.__compara('(')
+                if self.EXPRESION_LOGICA():
+                    self.__compara(')')
+                    return True
 
-        elif self.inicio == 12:
-            self.inicio = 22
+                else:
+                    self.__agregar_error(tipo='SINTACTICO', mensaje='Se esperaba una expresion')
 
-        elif self.inicio == 22:
-            self.inicio = 26
+            else:
+                self.__agregar_error(tipo='SINTACTICO', mensaje='Se esperaba una orden')
 
-        elif self.inicio == 26:
-            self.inicio = 31
+        return False
 
-        elif self.inicio == 31:
-            self.inicio = 35
+    def ENTRADA_SALIDA(self):
+        if self.__verifica(TOKENS['READ']):
+            self.__compara(self.complex.token)
+            self.__compara('(')
+            if self.DESTINO():
+                self.__compara(')')
+                self.__compara(';')
+                return True
 
-        elif self.inicio == 35:
-            self.inicio = 40
+            else:
+                self.__agregar_error(tipo='SINTACTICO', mensaje='Se esperaba un destino')
 
-        return self.inicio
+        elif self.__verifica(TOKENS['WRITE']):
+            self.__compara(self.complex.token)
+            self.__compara('(')
+            if self.EXPRESION():
+                self.__compara(')')
+                self.__compara(';')
+                return True
+
+            else:
+                self.__agregar_error(tipo='SINTACTICO', mensaje='Se esperaba una expresion')
+
+        return False
+
+    def RETORNO(self):
+        if self.__verifica(TOKENS['RETURN']):
+            self.__compara(self.complex.token)
+            if self.EXPRESION():
+                self.__compara(';')
+                return True
+
+            else:
+                self.__agregar_error(tipo='SINTACTICO', mensaje='Se esperaba una expresion')
+
+        return False
+    
+    def EXPRESION(self):
+        if self.__verifica('('):
+            self.__compara('(')
+            if self.EXPRESION():
+                self.__compara(')')
+                return True
+
+        elif self.EXPRESION_LOGICA():
+            return True
+
+        return False
+
+    #                A -> A                     a               | B
+    # EXPRESION_LOGICA -> EXPRESION_LOGICA oplog TERMINO_LOGICO | TERMINO_LOGICO
+
+    # EXPRESION_LOGICA -> TERMINO_LOGICO EXPRESION_LOGICA_PRIMA
+    # EXPRESION_LOGICA_PRIMA -> oplog TERMINO_LOGICO EXPRESION_LOGICA_PRIMA | ϵ
+
+    def EXPRESION_LOGICA(self):
+        if self.TERMINO_LOGICO():
+            if self.EXPRESION_LOGICA_PRIMA():
+                return True
+
+        return False
+
+    def EXPRESION_LOGICA_PRIMA(self):
+        if self.__verifica('|') or self.__verifica('&'):
+            self.__compara(self.complex.token)
+            if self.TERMINO_LOGICO():
+                if self.EXPRESION_LOGICA_PRIMA():
+                    return True
+
+                return False
+
+            return False
+
+        return True
+
+    def TERMINO_LOGICO(self):
+        if self.__verifica('!'):
+            self.__compara('!')
+            self.__compara('(')
+            if self.EXPRESION_LOGICA() or self.EXPRESION_RELACIONAL():
+                self.__compara(')')
+                return True
+
+            return False
+
+        elif self.EXPRESION_RELACIONAL():
+            return True
+
+        return False
+
+    # EXPRESION_RELACIONAL -> EXPRESION_RELACIONAL oprel EXPRESION_ARITMETICA | EXPRESION_ARITMETICA
+
+    # EXPRESION_RELACIONAL -> EXPRESION_ARITMETICA EXPRESION_RELACIONAL_PRIMA
+    # EXPRESION_RELACIONAL_PRIMA -> oprel EXPRESION_ARITMETICA EXPRESION_RELACIONAL_PRIMA | ϵ
+
+    def EXPRESION_RELACIONAL(self):
+        if self.EXPRESION_ARITMETICA():
+            if self.EXPRESION_RELACIONAL_PRIMA():
+                return True
+
+        return False
+
+    def EXPRESION_RELACIONAL_PRIMA(self):
+        if next((True for operador in ('MEN', 'MEI', 'IGU', 'DIF', 'MAI', 'MAY') if self.__verifica(TOKENS[operador])), False):
+            self.__compara(self.complex.token)
+            if self.EXPRESION_ARITMETICA():
+                if self.EXPRESION_RELACIONAL_PRIMA():
+                    return True
+
+                return False
+
+            return False
+
+        return True
+
+
+    # EXPRESION_ARITMETICA -> EXPRESION_ARITMETICA opsumres TERMINO_ARITMETICO | TERMINO_ARITMETICO
+
+    # EXPRESION_ARITMETICA -> TERMINO_ARITMETICO EXPRESION_ARITMETICA_PRIMA
+    # EXPRESION_ARITMETICA_PRIMA -> opsumres TERMINO_ARITMETICO EXPRESION_ARITMETICA_PRIMA | ϵ
+
+    def EXPRESION_ARITMETICA(self):
+        if self.TERMINO_ARITMETICO():
+            if self.EXPRESION_ARITMETICA_PRIMA():
+                return True
+
+        return False
+
+    def EXPRESION_ARITMETICA_PRIMA(self):
+        if self.__verifica('+') or self.__verifica('-'):
+            self.__compara(self.complex.token)
+            if self.TERMINO_ARITMETICO():
+                if self.EXPRESION_ARITMETICA_PRIMA():
+                    return True
+
+                return False
+
+            return False
+
+        return True
+
+    # TERMINO_ARITMETICO -> TERMINO_ARITMETICO opmuldiv FACTOR_ARITMETICO | FACTOR_ARITMETICO
+
+    # TERMINO_ARITMETICO -> FACTOR_ARITMETICO TERMINO_ARITMETICO_PRIMA
+    # TERMINO_ARITMETICO_PRIMA -> opmuldiv FACTOR_ARITMETICO TERMINO_ARITMETICO_PRIMA | ϵ
+
+    def TERMINO_ARITMETICO(self):
+        if self.FACTOR_ARITMETICO():
+            if self.TERMINO_ARITMETICO_PRIMA():
+                return True
+
+        return False
+
+    def TERMINO_ARITMETICO_PRIMA(self):
+        if next((True for operador in ('/*%\\') if self.__verifica(operador)), False):
+            self.__compara(self.complex.token)
+            if self.FACTOR_ARITMETICO():
+                if self.TERMINO_ARITMETICO_PRIMA():
+                    return True
+
+                return False
+
+            return False
+
+        return True
+
+    def FACTOR_ARITMETICO(self):
+        if self.__verifica('('):
+            self.__compara('(')
+            if self.EXPRESION_ARITMETICA():
+                self.__compara(')')
+                return True
+
+            return False
+
+        elif self.OPERANDO():
+            return True
+
+        return False
+
+    def OPERANDO(self):
+        if next((True for operador in ('NUM', 'NUMF', 'CONST_CHAR', 'CONST_STRING', 'TRUE', 'FALSE')\
+            if self.__verifica(TOKENS[operador])), False):
+            self.__compara(self.complex.token)
+            return True
+
+        elif self.__verifica('('):
+            self.__compara('(')
+            if self.EXPRESION_ARITMETICA():
+                self.__compara(')')
+                return True
+
+            return False
+
+        elif self.DESTINO() or self.INVOCAR_FUNCION():
+            return True
+
+        return False
+
+    def INVOCAR_FUNCION(self):
+        if self.__verifica(TOKENS['CALL']):
+            self.__compara(self.complex.token)
+            self.__compara(TOKENS['ID'])
+            self.__compara('(')
+            if self.ACTUALES():
+                self.__compara(')')
+                
+                return True
+
+            return False
+
+        return False
+
+    # ACTUALES -> ACTUALES, ACTUAL | ACTUAL
+
+    # ACTUALES -> ACTUAL ACTUALES_PRIMA
+    # ACTUALES_PRIMA -> , ACTUAL ACTUALES_PRIMA | ϵ
+
+    def ACTUALES(self):
+        if self.ACTUAL():
+
+            if self.ACTUALES_PRIMA():
+
+                return True
+
+            return False
+
+        return False
+
+    def ACTUALES_PRIMA(self):
+        if self.__verifica(','):
+            self.__compara(',')
+            if self.ACTUAL():
+                if self.ACTUALES_PRIMA():
+
+                    return True
+
+                return False
+            return False
+        return True
+
+    def ACTUAL(self):
+        self.EXPRESION()
+        return True
+
+    def PRINCIPAL(self):
+        if self.__verifica(TOKENS['MAIN']):
+            self.__compara(self.complex.token)
+            if self.lexico.fin_definicion_variables_globales is None:
+                self.lexico.marcar_posicion(posicion = 'fin_definicion_variables_globales')
+            self.lexico.zona_de_codigo = Zonas.CUERPO_PRINCIPAL
+            self.__compara('(')
+            if self.PARAMETROS_FORMALES():
+                self.__compara(')')
+                if self.BLOQUE():
+                    return True
+
+                else:
+                    self.__agregar_error(tipo='SINTACTICO', mensaje='Se esperaba un bloque de codigo')
+
+        return False
