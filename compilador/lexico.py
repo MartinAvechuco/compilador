@@ -14,10 +14,19 @@ TOKENS_INV = {token: constante for (constante, token) in TOKENS.items()}
 
 SIMBOLOS_PERMITIDOS = r"(){}[],;+-*/\%&|!"
 
+class TipoDato:
+    INT = 0
+    BOOL = 1
+    FLOAT = 2
+    CHAR = 3
+    STRING = 4
+    ARRAY = 5
+    
 class Simbolo(object):
     def __init__(self, token=None, lexema=None):
         self.token = token
         self.lexema = lexema
+        self.tipo = tipo
 
     def __repr__(self):
         return f"{self.lexema} ({self.token})"
@@ -25,7 +34,7 @@ class Simbolo(object):
     @property
     def codigo(self):
         return TOKENS_INV.get(self.token, 'ERROR!') if self.token > 255 else chr(self.token)
-
+    
 
 class Lexico(object):
     def __init__(self, codigo="", errores=ColeccionError()):
@@ -39,11 +48,12 @@ class Lexico(object):
         self.caracter = self.codigo[0]
         self.lexema = ""
         self.token = None
+        self.tipo_de_dato_actual = None
         self.__errores = errores
         self.errores = self.__errores.coleccion
         self.__cargar_palabras_reservadas()
 
-    def inserta_simbolo(self, simbolo=None, token=None, lexema=None):
+    def inserta_simbolo(self, simbolo=None, token=None, lexema=None, tipo=None):
         """
         Inserta un simbolo en la tabla de simbolos. Puede aceptar un simbolo,
         o bien, un token y lexema.
